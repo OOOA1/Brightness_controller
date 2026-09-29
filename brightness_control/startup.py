@@ -6,6 +6,17 @@ RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 NAME = "BrightnessVoiceControl"
 
 
+def is_autostart() -> bool:
+    if sys.platform != 'win32':
+        return False
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as key:
+            winreg.QueryValueEx(key, NAME)
+            return True
+    except OSError:
+        return False
+
+
 def set_autostart(enabled: bool) -> None:
     if sys.platform != "win32":
         return
