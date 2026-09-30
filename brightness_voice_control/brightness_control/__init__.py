@@ -1,0 +1,1 @@
+"""Brightness Voice Control."""
