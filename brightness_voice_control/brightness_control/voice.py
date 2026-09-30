@@ -38,6 +38,7 @@ class Voice(QObject):
         self.wake_phrase = normalize(wake_phrase) or 'компьютер'
         self.test_phrase = ''
         self._generation = 0
+        self._test_origin = None
 
     @staticmethod
     def devices():
@@ -58,18 +59,41 @@ class Voice(QObject):
             self._generation += 1
             self.mode = 'wake'
 
-    def test_wake_phrase(self, phrase):
+    def _test_stream(self, device, mode, phrase=''):
+        if self._test_origin is not None:
+            self.cancel_wake_test()
+        with self._lock:
+            self.test_phrase = phrase
+        if not self.is_listening_to(device):
+            self._test_origin = (bool(self.thread and self.thread.is_alive()), self.device)
+            self.start(device, initial_mode=mode)
+        else:
+            self.set_mode(mode)
+
+    def is_listening_to(self, device):
+        return bool(self.thread and self.thread.is_alive() and
+                    not self.stop_event.is_set() and self.device == device)
+
+    def test_wake_phrase(self, phrase, device=None):
         normalized = normalize(phrase)
         if not normalized:
             raise ValueError('Ключевая фраза не может быть пустой')
-        with self._lock:
-            self.test_phrase = normalized
-            self.mode = 'test'
+        self._test_stream(device, 'test', normalized)
+
+    def begin_microphone_test(self, device=None):
+        self._test_stream(device, 'meter')
 
     def cancel_wake_test(self):
-        with self._lock:
-            if self.mode == 'test':
-                self.mode = 'wake'
+        origin = self._test_origin
+        self._test_origin = None
+        if origin is not None:
+            was_running, original_device = origin
+            if was_running:
+                self.start(original_device)
+            else:
+                self.stop()
+        elif self.mode in ('test', 'meter'):
+            self.reset_audio()
 
     def reset_audio(self):
         """Invalidate recognizer state and queued audio after local speech."""
@@ -77,11 +101,11 @@ class Voice(QObject):
             self._generation += 1
             self.mode = 'wake'
 
-    def start(self, device=None):
+    def start(self, device=None, initial_mode='wake'):
         self.stop()
         self.stop_event = threading.Event()
         self.device = device
-        self.set_mode('wake')
+        self.set_mode(initial_mode)
         self.thread = threading.Thread(target=self._listen, args=(self.stop_event, device),
                                        daemon=True, name='Vosk listener')
         self.thread.start()
@@ -232,6 +256,8 @@ class Voice(QObject):
                             success = confirmed_wake(json.loads(test_recognizer.Result()), test_phrase)
                             self.wake_test_result.emit(success)
                             self.set_mode('wake')
+                    elif mode == 'meter':
+                        pass
                     elif mode == 'command':
                         if command.AcceptWaveform(chunk):
                             emit_result(command)
@@ -241,7 +267,10 @@ class Voice(QObject):
         except Exception as exc:
             if not stop_event.is_set():
                 LOG.exception('Voice input failed')
-                self.error.emit(str(exc))
+                if self.mode in ('test', 'meter'):
+                    self.wake_test_result.emit(False)
+                else:
+                    self.error.emit(str(exc))
 
 
 from .tts import Speaker  # backward-compatible import

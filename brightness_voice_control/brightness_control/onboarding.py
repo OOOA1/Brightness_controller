@@ -2,7 +2,7 @@
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QHBoxLayout,
                               QLabel, QPushButton, QStackedWidget, QVBoxLayout, QWidget,
-                              QLineEdit, QScrollArea, QMessageBox)
+                              QLineEdit, QProgressBar, QScrollArea, QMessageBox)
 from .parser import split_wake, parse
 from .config import normalize_phrase
 
@@ -40,6 +40,7 @@ class Onboarding(QDialog):
         self._buttons(0)
         controller.voice.recognized.connect(self._heard)
         controller.voice.wake_test_result.connect(self._wake_result)
+        controller.voice.level.connect(self._microphone_level)
 
     def _page(self, title, description):
         page = QWidget()
@@ -105,18 +106,41 @@ class Onboarding(QDialog):
         layout.addWidget(self.microphone)
         test = QPushButton('Проверить микрофон')
         self.mic_status = QLabel('Ожидание')
+        self.mic_level = QProgressBar()
+        self.mic_level.setRange(0, 100)
+        self.mic_level.setTextVisible(False)
+        self.mic_checking = False
+        self.mic_peak = 0.
         test.clicked.connect(self._test_microphone)
         layout.addWidget(test)
+        layout.addWidget(self.mic_level)
         layout.addWidget(self.mic_status)
         layout.addStretch()
 
     def _test_microphone(self):
-        from .settings_window import Settings
-        Settings._test_microphone(self)
+        self.mic_peak = 0.
+        self.mic_checking = True
+        self.controller.voice.begin_microphone_test(self.microphone.currentData())
+        self.mic_status.setText('Говорите…')
+        QTimer.singleShot(3500, self._finish_microphone_check)
+
+    def _microphone_level(self, level):
+        if self.controller.voice.is_listening_to(self.microphone.currentData()):
+            self.mic_level.setValue(round(level * 100))
+            if self.mic_checking:
+                self.mic_peak = max(self.mic_peak, level)
+
+    def _finish_microphone_check(self):
+        if self.mic_checking:
+            self.mic_checking = False
+            self.controller.voice.cancel_wake_test()
+            self.mic_status.setText('✓ Микрофон работает' if self.mic_peak > .02 else
+                                    'Сигнал не обнаружен')
 
     def _wake_page(self):
         layout = self._page('Как обращаться к компьютеру?',
-                            'Для лучшей точности используйте 1–3 слова.')
+                            'Необычные слова могут отсутствовать в словаре.\n'
+                            'Проверьте фразу перед сохранением; лучше использовать 1–3 слова.')
         self.wake_phrase = QLineEdit(self.config['wake_phrase'])
         layout.addWidget(self.wake_phrase)
         self.wake_status = QLabel('')
@@ -132,11 +156,19 @@ class Onboarding(QDialog):
             self.wake_status.setText('Введите ключевую фразу.')
             return
         self.wake_status.setText(f'Скажите: «{phrase}»')
-        self.controller.voice.test_wake_phrase(phrase)
+        self.mic_checking = False
+        self.controller.voice.test_wake_phrase(phrase, self.microphone.currentData())
         QTimer.singleShot(8000, self._wake_timeout)
 
     def _wake_result(self, success):
-        self.wake_status.setText('✓ Фраза распознана' if success else 'Не удалось распознать. Попробуйте ещё раз.')
+        if self.mic_checking:
+            self.mic_checking = False
+            self.controller.voice.cancel_wake_test()
+            self.mic_status.setText('Устройство недоступно')
+            return
+        self.controller.voice.cancel_wake_test()
+        self.wake_status.setText('✓ Фраза распознана' if success else
+                                 'Не удалось распознать фразу. Попробуйте другое обращение.')
         if success:
             from PySide6.QtWidgets import QApplication
             QApplication.beep()
@@ -144,7 +176,7 @@ class Onboarding(QDialog):
     def _wake_timeout(self):
         if self.controller.voice.mode == 'test':
             self.controller.voice.cancel_wake_test()
-            self.wake_status.setText('Не удалось распознать. Попробуйте ещё раз.')
+            self.wake_status.setText('Не удалось распознать фразу. Попробуйте другое обращение.')
 
     def _voice_test(self):
         layout = self._page('Проверка голоса', 'Скажите ключевую фразу и «Яркость 50 процентов».')
@@ -195,8 +227,14 @@ class Onboarding(QDialog):
                 QMessageBox.warning(self, 'Мониторы', 'Названия мониторов должны различаться.')
                 return
             for key, field in self.assignments.items():
-                self.config['monitors'][key]['display_name'] = field.text().strip()
+                record = self.config['monitors'][key]
+                name = field.text().strip()
+                if name != record['display_name']:
+                    record['name_source'] = 'user'
+                record['display_name'] = name
         if current == 2 and offset > 0:
+            self.mic_checking = False
+            self.controller.voice.cancel_wake_test()
             self.config['microphone'] = self.microphone.currentData()
             self.config['microphone_name'] = (self.microphone.currentText().split(': ', 1)[-1]
                                               if self.microphone.currentData() is not None else '')

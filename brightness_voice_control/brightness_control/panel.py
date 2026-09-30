@@ -1,7 +1,8 @@
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QCursor
+from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
                               QSlider, QVBoxLayout, QWidget, QScrollArea)
+from .model import common_brightness
 
 
 class TrayPanel(QDialog):
@@ -78,7 +79,7 @@ class TrayPanel(QDialog):
         self.sliders.clear()
         rows = list(monitors)
         if len(rows) > 1:
-            rows.append(('__all__', 'Все мониторы', min(v for _, _, v in monitors)))
+            rows.append(('__all__', 'Все мониторы', common_brightness(v for _, _, v in monitors)))
         for monitor_id, name, value in rows:
             frame = QFrame()
             frame.setObjectName('card')
@@ -87,12 +88,12 @@ class TrayPanel(QDialog):
             line = QHBoxLayout()
             line.addWidget(QLabel(name))
             line.addStretch()
-            amount = QLabel(f'{round(value)}%')
+            amount = QLabel(f'{round(value)}%' if value is not None else '—')
             line.addWidget(amount)
             block.addLayout(line)
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(0, 100)
-            slider.setValue(round(value))
+            slider.setValue(round(value) if value is not None else 50)
             slider.sliderPressed.connect(lambda k=monitor_id: self.preview_started.emit(k))
             slider.sliderMoved.connect(lambda v, k=monitor_id, a=amount: (
                 a.setText(f'{v}%'), self.preview_moved.emit(k, v)))
@@ -121,6 +122,18 @@ class TrayPanel(QDialog):
             frame = slider.parent()
             label = frame.layout().itemAt(0).layout().itemAt(2).widget()
             label.setText(f'{round(value)}%')
+        common = self.sliders.get('__all__')
+        individual = [item for key, item in self.sliders.items() if key != '__all__']
+        if common and individual and not common.isSliderDown():
+            values = [item.value() for item in individual]
+            shared = common_brightness(values)
+            common.blockSignals(True)
+            if shared is not None:
+                common.setValue(shared)
+            common.blockSignals(False)
+            frame = common.parent()
+            frame.layout().itemAt(0).layout().itemAt(2).widget().setText(
+                f'{shared}%' if shared is not None else '—')
 
     def _keyboard_changed(self, name, value, slider, label):
         if slider.hasFocus() and not slider.isSliderDown():
@@ -132,7 +145,11 @@ class TrayPanel(QDialog):
     def show_near_cursor(self):
         self.adjustSize()
         cursor = QCursor.pos()
-        area = self.screen().availableGeometry()
+        screen = QGuiApplication.screenAt(cursor) or QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        self.setScreen(screen)
+        area = screen.availableGeometry()
         self.move(max(area.left(), min(cursor.x() - self.width(), area.right() - self.width())),
                   max(area.top(), min(cursor.y() - self.height(), area.bottom() - self.height())))
         self.show()

@@ -9,6 +9,15 @@ from PySide6.QtCore import QObject, Signal
 LOG = logging.getLogger(__name__)
 
 
+def choose_voice(requested: str, voices: list[tuple[str, str, str]]) -> str:
+    if requested and any(voice_id == requested for voice_id, _, _ in voices):
+        return requested
+    russian = next((voice_id for voice_id, name, language in voices
+                    if 'ru' in str(language).lower() or '419' in str(language).lower() or
+                    'russian' in name.lower() or 'рус' in name.lower()), None)
+    return russian or (voices[0][0] if voices else '')
+
+
 class TTSProvider(Protocol):
     def list_voices(self) -> list[tuple[str, str]]: ...
     def speak(self, text: str, settings: dict) -> None: ...
@@ -23,31 +32,38 @@ class WindowsSAPIProvider:
         self.engine = pyttsx3.init('sapi5')
 
     @staticmethod
-    def list_voices() -> list[tuple[str, str]]:
+    def voice_details() -> list[tuple[str, str, str]]:
         import pythoncom
         pythoncom.CoInitialize()
         try:
             import win32com.client
             collection = win32com.client.Dispatch('SAPI.SpVoice').GetVoices()
-            return [(collection.Item(i).Id, collection.Item(i).GetDescription())
-                    for i in range(collection.Count)]
+            details = []
+            for i in range(collection.Count):
+                token = collection.Item(i)
+                try:
+                    language = token.GetAttribute('Language')
+                except Exception:
+                    language = ''
+                details.append((token.Id, token.GetDescription(), language))
+            return details
         except Exception:
             LOG.exception('Cannot enumerate SAPI voices')
             return []
         finally:
             pythoncom.CoUninitialize()
 
+    @staticmethod
+    def list_voices() -> list[tuple[str, str]]:
+        return [(voice_id, name) for voice_id, name, _ in WindowsSAPIProvider.voice_details()]
+
     def is_available(self) -> bool:
         return bool(self.engine)
 
     def speak(self, text: str, settings: dict) -> None:
         voices = self.engine.getProperty('voices')
-        selected = settings.get('voice', '')
-        ids = {voice.id for voice in voices}
-        fallback = next((v.id for v in voices if 'ru' in str(v.languages).lower() or
-                         'russian' in v.name.lower()), voices[0].id if voices else None)
-        if selected not in ids:
-            selected = fallback
+        selected = choose_voice(settings.get('voice', ''), [
+            (v.id, v.name, str(v.languages)) for v in voices])
         if selected:
             self.engine.setProperty('voice', selected)
         self.engine.setProperty('volume', max(0., min(1., settings.get('volume', 100) / 100)))
@@ -77,6 +93,10 @@ class Speaker(QObject):
     @staticmethod
     def list_voices() -> list[tuple[str, str]]:
         return WindowsSAPIProvider.list_voices()
+
+    @staticmethod
+    def resolve_voice(voice_id: str) -> str:
+        return choose_voice(voice_id, WindowsSAPIProvider.voice_details())
 
     def say(self, text, settings=None):
         if not self.closed:

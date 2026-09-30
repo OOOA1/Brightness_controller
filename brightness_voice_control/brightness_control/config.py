@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import shutil
 import re
+from .model import inferred_name_source
 
 SCHEMA = 3
 LOG = logging.getLogger(__name__)
@@ -72,6 +73,12 @@ def normalize_phrase(value: str) -> str:
     return ' '.join(re.sub(r'[^\w\s]', ' ', value.lower().replace('ё', 'е')).split())
 
 
+def sync_autostart(config: dict, registry_enabled: bool) -> bool:
+    changed = config.get('autostart') != registry_enabled
+    config['autostart'] = registry_enabled
+    return changed
+
+
 def migrate(data: object) -> dict:
     result = copy.deepcopy(DEFAULT)
     if not isinstance(data, dict):
@@ -117,6 +124,8 @@ def migrate(data: object) -> dict:
             continue
         monitor_records[key] = {
             'display_name': name.strip() or 'Монитор',
+            'name_source': (item.get('name_source') if item.get('name_source') in ('auto', 'user')
+                            else inferred_name_source(name.strip())),
             'voice_aliases': list(dict.fromkeys(normalize_phrase(a) for a in aliases
                                                  if isinstance(a, str) and normalize_phrase(a))),
         }
@@ -229,8 +238,9 @@ def save(data: dict, path: Path | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     clean = migrate(data)
     temp = path.with_name('config.tmp')
-    temp.write_text(json.dumps(clean, ensure_ascii=False, indent=2), encoding='utf-8')
-    with temp.open('rb') as handle:
+    with temp.open('w', encoding='utf-8') as handle:
+        json.dump(clean, handle, ensure_ascii=False, indent=2)
+        handle.flush()
         os.fsync(handle.fileno())
     if path.exists():
         try:

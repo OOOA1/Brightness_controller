@@ -2,7 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from brightness_control.config import load, save, SCHEMA
+from brightness_control.config import load, save, SCHEMA, sync_autostart
 
 
 class ConfigTests(unittest.TestCase):
@@ -21,7 +21,8 @@ class ConfigTests(unittest.TestCase):
             config = load(path)
             self.assertTrue(config['first_run_completed'])
             self.assertEqual(config['monitors']['device:abc'],
-                             {'display_name': 'Левый', 'voice_aliases': ['игровой']})
+                             {'display_name': 'Левый', 'name_source': 'auto',
+                              'voice_aliases': ['игровой']})
             self.assertEqual(config['profiles'][0]['monitor_values']['device:abc'], 5)
             self.assertEqual(config['wake_phrase'], 'компьютер')
             self.assertEqual(config['tts_voice'], 'selected-voice')
@@ -70,9 +71,25 @@ class ConfigTests(unittest.TestCase):
             config = load(path)
             self.assertEqual(config['wake_phrase'], 'компьютер')
             self.assertEqual(config['monitors']['edid:one']['voice_aliases'], ['лг', 'lg'])
+            self.assertEqual(config['monitors']['edid:one']['name_source'], 'user')
             config['monitors']['edid:one']['display_name'] = 'Главный'
             save(config, path)
             self.assertEqual(load(path)['profiles'][0]['monitor_values']['edid:one'], 10)
+
+    def test_name_source_migration_and_registry_sync(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'config.json'
+            path.write_text(json.dumps({'schema_version': 3, 'autostart': True,
+                'monitors': {'a': {'display_name': 'Монитор 4', 'voice_aliases': []},
+                             'b': {'display_name': 'Телевизор', 'voice_aliases': []}}}),
+                encoding='utf-8')
+            config = load(path)
+            self.assertEqual(config['monitors']['a']['name_source'], 'auto')
+            self.assertEqual(config['monitors']['b']['name_source'], 'user')
+            self.assertTrue(sync_autostart(config, False))
+            self.assertFalse(config['autostart'])
+            save(config, path)
+            self.assertFalse(load(path)['autostart'])
 
 
 if __name__ == '__main__':

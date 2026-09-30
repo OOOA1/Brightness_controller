@@ -127,7 +127,7 @@ def parse(text: str, confidence: float = 1., step: int = 10,
     values = _numbers(raw_without_ordinal.split())
     if len(values) > 1 or (values and values[0] > 100):
         return None
-    if re.search(r'\b(?:статус|текущ\w*|сколько|какая сейчас яркость)\b', raw):
+    if re.search(r'\b(?:статус|текущ\w*|сколько|какая\s+(?:сейчас\s+)?яркость)\b', raw):
         return command('show_status', target)
     for profile in profiles or []:
         aliases = [profile.get('name', ''), *(profile.get('voice_aliases') or [])]
@@ -167,7 +167,9 @@ def describe(command: Command, values: dict[str, int | float]) -> str:
     if command.intent == 'activate_profile':
         return 'Профиль активирован'
     if command.intent == 'show_status':
-        return ', '.join(f'{k}: {round(v)}%' for k, v in values.items())
+        selected = ([command.target] if command.target else list(values))
+        return ', '.join(f'{name} — {round(values[name])}%'
+                         for name in selected if name in values)
     if command.intent == 'restore':
         return f'{label} → прежняя яркость'
     if command.intent == 'blackout':

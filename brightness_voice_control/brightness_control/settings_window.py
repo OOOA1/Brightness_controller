@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog,
     QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QListWidget, QMessageBox, QPushButton, QScrollArea, QSpinBox, QFileDialog,
+    QListWidget, QMessageBox, QPushButton, QProgressBar, QScrollArea, QSpinBox, QFileDialog,
     QStackedWidget, QVBoxLayout, QWidget)
 
 from .editors import ProfileEditor, ScheduleEditor
@@ -29,6 +29,7 @@ class Settings(QDialog):
         self.manager, self.config, self.voice, self.speaker = manager, config, voice, speaker
         self.controller = controller
         self.voice.wake_test_result.connect(self._wake_test_result)
+        self.voice.level.connect(self._microphone_level)
         self.profiles = copy.deepcopy(config['profiles'])
         self.schedule = copy.deepcopy(config['schedule'])
         self.setWindowTitle('Настройки — Brightness Voice Control')
@@ -127,7 +128,8 @@ class Settings(QDialog):
     def _monitor_registry_changed(self):
         if set(self.manager.layers) == self._monitor_keys:
             return
-        pending = {key: (field.text(), self.aliases[key].text())
+        pending = {key: (field.text() if field.isModified() else None,
+                         self.aliases[key].text() if self.aliases[key].isModified() else None)
                    for key, field in self.assignments.items()}
         old = self.stack.widget(1)
         self.stack.removeWidget(old)
@@ -138,8 +140,12 @@ class Settings(QDialog):
         scroll.setWidget(self._monitors())
         for key, (name, aliases) in pending.items():
             if key in self.assignments:
-                self.assignments[key].setText(name)
-                self.aliases[key].setText(aliases)
+                if name is not None:
+                    self.assignments[key].setText(name)
+                    self.assignments[key].setModified(True)
+                if aliases is not None:
+                    self.aliases[key].setText(aliases)
+                    self.aliases[key].setModified(True)
         self.stack.insertWidget(1, scroll)
         self.stack.setCurrentIndex(self.sidebar.currentRow())
 
@@ -179,18 +185,26 @@ class Settings(QDialog):
         except Exception:
             pass
         self.microphone.setCurrentIndex(max(0, self.microphone.findData(self.config['microphone'])))
+        self.microphone.currentIndexChanged.connect(self._microphone_changed)
         form.addRow('Микрофон', self.microphone)
         check = QPushButton('Проверить микрофон')
         check.clicked.connect(self._test_microphone)
         self.mic_status = QLabel('Скажите несколько слов после нажатия')
+        self.mic_level = QProgressBar()
+        self.mic_level.setRange(0, 100)
+        self.mic_level.setTextVisible(False)
+        self.mic_peak = 0.
+        self.mic_checking = False
         line = QHBoxLayout()
         line.addWidget(check)
+        line.addWidget(self.mic_level)
         line.addWidget(self.mic_status)
         form.addRow('Уровень', line)
         self.wake_phrase = QLineEdit(self.config['wake_phrase'])
         self.wake_phrase.setPlaceholderText('Компьютер')
         form.addRow('Ключевая фраза', self.wake_phrase)
-        self.wake_hint = QLabel('Рекомендуется короткая фраза из 1–3 слов.')
+        self.wake_hint = QLabel('Необычные слова могут отсутствовать в словаре распознавания.\n'
+                                'Проверьте фразу перед сохранением. Лучше использовать 1–3 слова.')
         form.addRow('', self.wake_hint)
         wake_test = QPushButton('Проверить фразу')
         wake_test.clicked.connect(self._test_wake)
@@ -222,8 +236,6 @@ class Settings(QDialog):
         for voice_id, title in self.speaker.list_voices():
             self.voice_name.addItem(title, voice_id)
         selected_voice = self.config['tts_voice']
-        if selected_voice and self.voice_name.findData(selected_voice) < 0:
-            self.voice_name.addItem('Ранее выбранный голос недоступен — используется системный', selected_voice)
         self.voice_name.setCurrentIndex(max(0, self.voice_name.findData(selected_voice)))
         self.provider = QComboBox()
         self.provider.addItem('Windows SAPI5', 'windows')
@@ -252,16 +264,20 @@ class Settings(QDialog):
         if not phrase:
             self.wake_hint.setText('Введите ключевую фразу.')
             return
-        if not self.config['voice_runtime_available']:
-            self.wake_hint.setText('Микрофон сейчас недоступен. Проверьте его и повторите.')
-            return
+        self.mic_checking = False
         self.wake_hint.setText(f'Скажите: «{phrase}»')
-        self.voice.test_wake_phrase(phrase)
+        self.voice.test_wake_phrase(phrase, self.microphone.currentData())
         QTimer.singleShot(8000, self._wake_test_timeout)
 
     def _wake_test_result(self, success):
+        if self.mic_checking:
+            self.mic_checking = False
+            self.voice.cancel_wake_test()
+            self.mic_status.setText('Устройство недоступно')
+            return
+        self.voice.cancel_wake_test()
         self.wake_hint.setText('✓ Фраза распознана' if success else
-                               'Не удалось распознать. Попробуйте ещё раз.')
+                               'Не удалось распознать фразу. Попробуйте другое обращение.')
         if success:
             from PySide6.QtWidgets import QApplication
             QApplication.beep()
@@ -269,26 +285,36 @@ class Settings(QDialog):
     def _wake_test_timeout(self):
         if self.voice.mode == 'test':
             self.voice.cancel_wake_test()
-            self.wake_hint.setText('Не удалось распознать. Попробуйте ещё раз.')
+            self.wake_hint.setText('Не удалось распознать фразу. Попробуйте другое обращение.')
 
     def reject(self):
         self.voice.cancel_wake_test()
+        self.voice.level.disconnect(self._microphone_level)
         super().reject()
 
     def _test_microphone(self):
-        try:
-            import numpy  # sounddevice.rec() creates a NumPy array
-            import sounddevice as sd
-            audio = sd.rec(16000, samplerate=16000, channels=1, dtype='float32',
-                           device=self.microphone.currentData())
-            sd.wait()
-            peak = float(abs(audio).max())
-            self.mic_status.setText('Сигнал хороший' if peak > .02 else
-                                    'Слишком тихо' if peak > .005 else 'Сигнал не обнаружен')
-        except ImportError:
-            self.mic_status.setText('Не установлен NumPy. Выполните: pip install -r requirements.txt')
-        except Exception as exc:
-            self.mic_status.setText('Устройство недоступно: ' + str(exc))
+        self.voice.begin_microphone_test(self.microphone.currentData())
+        self.mic_peak = 0.
+        self.mic_checking = True
+        self.mic_status.setText('Говорите…')
+        QTimer.singleShot(3500, self._finish_microphone_check)
+
+    def _microphone_changed(self):
+        self.mic_level.setValue(0)
+        self.mic_status.setText('Нажмите «Проверить микрофон»')
+
+    def _microphone_level(self, level):
+        if self.voice.is_listening_to(self.microphone.currentData()):
+            self.mic_level.setValue(round(level * 100))
+            if self.mic_checking:
+                self.mic_peak = max(self.mic_peak, level)
+
+    def _finish_microphone_check(self):
+        if self.mic_checking:
+            self.mic_checking = False
+            self.voice.cancel_wake_test()
+            self.mic_status.setText('✓ Микрофон работает' if self.mic_peak > .02 else
+                                    'Сигнал не обнаружен')
 
     def _brightness(self):
         page, layout = self._page('Яркость')
@@ -541,7 +567,11 @@ class Settings(QDialog):
                 return
             aliases = [normalize_phrase(a) for a in self.aliases[key].text().split(',')]
             aliases = list(dict.fromkeys(a for a in aliases if a))
-            records[key] = {'display_name': name, 'voice_aliases': aliases}
+            previous = self.config['monitors'].get(key, {})
+            records[key] = {'display_name': name,
+                            'name_source': ('user' if name != previous.get('display_name')
+                                            else previous.get('name_source', 'user')),
+                            'voice_aliases': aliases}
             for alias in [normalize_phrase(name), *aliases]:
                 if alias in owners and owners[alias] != key:
                     QMessageBox.warning(self, 'Обращения',
@@ -582,6 +612,7 @@ class Settings(QDialog):
         self.config['autostart'] = self.autostart.isChecked()
         self.config['start_in_tray'] = self.tray_start.isChecked()
         self.config['appearance']['theme'] = self.theme.currentData()
-        self.controller.settings_saved()
+        self.mic_checking = False
         self.voice.cancel_wake_test()
+        self.controller.settings_saved()
         self.accept()

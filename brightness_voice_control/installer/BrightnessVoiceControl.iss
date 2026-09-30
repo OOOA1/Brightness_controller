@@ -1,5 +1,5 @@
 #define MyAppName "Brightness Voice Control"
-#define MyAppVersion "1.1"
+#define MyAppVersion "1.1.1"
 #define MyAppExeName "BrightnessVoiceControl.exe"
 
 [Setup]
@@ -11,7 +11,7 @@ DefaultDirName={localappdata}\Programs\Brightness Voice Control
 DefaultGroupName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 OutputDir=..\dist
-OutputBaseFilename=BrightnessVoiceControl-Setup-1.1
+OutputBaseFilename=BrightnessVoiceControl-Setup-1.1.1
 SetupIconFile=..\assets\app.ico
 Compression=lzma2
 SolidCompression=yes

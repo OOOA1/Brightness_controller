@@ -6,7 +6,7 @@ from PySide6.QtGui import QColor, QGuiApplication, QPainter
 from PySide6.QtWidgets import QWidget
 
 from .identity import device_details
-from .model import MonitorState, clamp, default_display_name, fill_default_profiles
+from .model import MonitorState, clamp, refresh_auto_names, fill_default_profiles
 
 LOG = logging.getLogger(__name__)
 
@@ -144,13 +144,11 @@ class MonitorManager(QObject):
     def _default_names(self):
         mapping = self.config['monitors']
         ordered = self.active_monitor_ids()
-        for index, key in enumerate(ordered, 1):
+        refresh_auto_names(mapping, ordered)
+        for key in ordered:
             if key in self._ambiguous:
                 self.unassigned.emit(key)
                 continue
-            if key not in mapping:
-                name = default_display_name(index, len(ordered))
-                mapping[key] = {'display_name': name, 'voice_aliases': []}
             for profile in self.config['profiles']:
                 values = profile.get('monitor_values', {})
                 legacy = profile.get('legacy_monitor_values', {})

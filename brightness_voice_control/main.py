@@ -9,7 +9,7 @@ from PySide6.QtCore import QObject, QTimer
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QCheckBox, QMenu, QMessageBox, QSystemTrayIcon
 
-from brightness_control.config import config_path, load, save
+from brightness_control.config import config_path, load, save, sync_autostart
 from brightness_control.overlay import MonitorManager
 from brightness_control.panel import TrayPanel
 from brightness_control.parser import parse, split_wake, describe, spoken, normalize
@@ -55,8 +55,11 @@ class Controller(QObject):
         self.app = app
         self.instance = instance
         self.config = load()
-        if is_autostart():
-            self.config['autostart'] = True
+        if sync_autostart(self.config, is_autostart()):
+            try:
+                save(self.config)
+            except OSError:
+                LOG.exception('Could not persist actual autostart state')
         app.setStyleSheet(style(self.config['appearance']['theme']))
         self.manager = MonitorManager(self.config)
         self.manager.changed.connect(self._refresh)
@@ -69,6 +72,10 @@ class Controller(QObject):
         self.voice.ready.connect(self._voice_ready)
         self.voice.error.connect(self._voice_error)
         self.speaker = Speaker(self.voice)
+        selected_voice = self.speaker.resolve_voice(self.config['tts_voice'])
+        if selected_voice != self.config['tts_voice']:
+            LOG.warning('Configured TTS voice unavailable; using Windows fallback')
+            self.config['tts_voice'] = selected_voice
         self.speaker.started.connect(self._tts_started)
         self.speaker.finished.connect(self._tts_finished)
         self.machine = VoiceMachine(self.config['voice_enabled'])
@@ -222,6 +229,8 @@ class Controller(QObject):
 
     def _settings(self):
         self.panel.hide()
+        if sync_autostart(self.config, is_autostart()):
+            self._save()
         dialog = Settings(self.manager, self.config, self.voice, self.speaker, self)
         result = dialog.exec()
         if not result and not self.config['tray_tip_shown']:
@@ -244,6 +253,7 @@ class Controller(QObject):
         except OSError:
             LOG.exception('Could not set autostart')
             self.notice.show_message('Не удалось настроить автозапуск', error=True)
+        sync_autostart(self.config, is_autostart())
         self.app.setStyleSheet(style(self.config['appearance']['theme']))
         self.notice.placement = self.config['notifications']['placement']
         self.voice.set_wake_phrase(self.config['wake_phrase'])

@@ -1,5 +1,6 @@
 import unittest
-from brightness_control.model import MonitorState, clamp, default_display_name, fill_default_profiles
+from brightness_control.model import (MonitorState, clamp, default_display_name,
+    fill_default_profiles, refresh_auto_names, common_brightness)
 
 
 class ModelTests(unittest.TestCase):
@@ -22,6 +23,26 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(default_display_name(1, 1), 'Основной')
         self.assertEqual([default_display_name(i, 2) for i in (1, 2)], ['Левый', 'Правый'])
         self.assertEqual(default_display_name(4, 4), 'Монитор 4')
+
+    def test_hotplug_auto_names_and_custom_name(self):
+        records = {}
+        expected = [(['a'], ['Основной']),
+                    (['a', 'b'], ['Левый', 'Правый']),
+                    (['a', 'b', 'c'], ['Монитор 1', 'Монитор 2', 'Монитор 3']),
+                    (['a', 'b'], ['Левый', 'Правый']),
+                    (['a'], ['Основной'])]
+        for active, names in expected:
+            refresh_auto_names(records, active)
+            self.assertEqual([records[key]['display_name'] for key in active], names)
+        records['a']['display_name'] = 'Игровой'
+        records['a']['name_source'] = 'user'
+        for active in (['a', 'b'], ['a', 'b', 'c'], ['a']):
+            refresh_auto_names(records, active)
+            self.assertEqual(records['a']['display_name'], 'Игровой')
+
+    def test_mixed_common_brightness(self):
+        self.assertEqual(common_brightness([30, 30]), 30)
+        self.assertIsNone(common_brightness([30, 50]))
 
     def test_dynamic_profile_default_preserves_existing(self):
         profiles = [{'id': 'sleep', 'monitor_values': {'id-a': 5}},

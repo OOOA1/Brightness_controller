@@ -1,5 +1,6 @@
 """Mutable physical brightness state, independent of GUI and audio."""
 from dataclasses import dataclass
+import re
 
 
 def clamp(value: float) -> float:
@@ -12,6 +13,27 @@ def default_display_name(index: int, count: int) -> str:
     if count == 2:
         return 'Левый' if index == 1 else 'Правый'
     return f'Монитор {index}'
+
+
+def inferred_name_source(name: str) -> str:
+    return ('auto' if name in ('Основной', 'Левый', 'Правый') or
+            re.fullmatch(r'Монитор [1-9]\d*', name) else 'user')
+
+
+def refresh_auto_names(records: dict, ordered_ids: list[str]) -> None:
+    """Recalculate only generated names when the active topology changes."""
+    for index, monitor_id in enumerate(ordered_ids, 1):
+        record = records.setdefault(monitor_id, {
+            'display_name': default_display_name(index, len(ordered_ids)),
+            'name_source': 'auto', 'voice_aliases': [],
+        })
+        if record.get('name_source') == 'auto':
+            record['display_name'] = default_display_name(index, len(ordered_ids))
+
+
+def common_brightness(values) -> int | None:
+    rounded = [round(value) for value in values]
+    return rounded[0] if rounded and all(value == rounded[0] for value in rounded) else None
 
 
 def fill_default_profiles(profiles: list[dict], monitor_ids: list[str]) -> None:

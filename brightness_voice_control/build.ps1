@@ -1,7 +1,7 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 if (-not (Test-Path 'models\vosk-model-small-ru-0.22\am')) {
-    throw 'Сначала запустите: python download_model.py'
+    throw 'Run first: python download_model.py'
 }
 python -m PyInstaller --noconfirm --clean --onefile --windowed `
   --name BrightnessVoiceControl `
@@ -13,8 +13,8 @@ python -m PyInstaller --noconfirm --clean --onefile --windowed `
   --hidden-import numpy `
   --hidden-import pythoncom --hidden-import win32com.client `
   main.py
-if ($LASTEXITCODE -ne 0) { throw 'Сборка PyInstaller завершилась с ошибкой.' }
-Write-Host 'Готово: dist\BrightnessVoiceControl.exe'
+if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed.' }
+Write-Host 'Build complete: dist\BrightnessVoiceControl.exe'
 $isccCommand = Get-Command ISCC.exe -ErrorAction SilentlyContinue
 $isccPath = if ($isccCommand) { $isccCommand.Source } else { $null }
 if (-not $isccPath) {
@@ -23,8 +23,8 @@ if (-not $isccPath) {
 }
 if ($isccPath) {
   & $isccPath 'installer\BrightnessVoiceControl.iss'
-  if ($LASTEXITCODE -ne 0) { throw 'Сборка установщика завершилась с ошибкой.' }
-  Write-Host 'Готово: dist\BrightnessVoiceControl-Setup-1.1.exe'
+  if ($LASTEXITCODE -ne 0) { throw 'Installer build failed.' }
+  Write-Host 'Build complete: dist\BrightnessVoiceControl-Setup-1.1.1.exe'
 } else {
-  Write-Host 'Для установщика установите Inno Setup 6 и запустите build.ps1 снова.'
+  Write-Host 'Install Inno Setup 6 and run build.ps1 again to create installer.'
 }

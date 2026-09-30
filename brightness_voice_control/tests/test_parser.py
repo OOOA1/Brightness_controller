@@ -1,5 +1,5 @@
 import unittest
-from brightness_control.parser import parse, split_wake
+from brightness_control.parser import parse, split_wake, describe, spoken
 
 ALIASES = {
     'левый': 'device:left', 'слева': 'device:left',
@@ -50,6 +50,15 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(parse('режим сна', profiles=[{'id': 'sleep', 'name': 'Сон'}]).profile_id, 'sleep')
         self.assertIsNone(parse('яркость 30').target)
         self.assertIsNone(parse('сделай темнее').target)
+
+    def test_targeted_status(self):
+        values = {'Игровой': 20, 'Правый': 50}
+        target = parse('какая яркость игрового', aliases={'игровой': 'Игровой'})
+        self.assertEqual(target.intent, 'show_status')
+        self.assertEqual(describe(target, values), 'Игровой — 20%')
+        self.assertEqual(spoken(target, values), 'Игровой — 20 процентов.')
+        everyone = parse('какая сейчас яркость')
+        self.assertEqual(describe(everyone, values), 'Игровой — 20%, Правый — 50%')
 
 
 if __name__ == '__main__':
